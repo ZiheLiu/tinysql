@@ -43,6 +43,7 @@ const (
 	RecordRowKeyLen       = prefixLen + idLen /*handle*/
 	tablePrefixLength     = 1
 	recordPrefixSepLength = 2
+	indexPrefixSepLength  = 2
 )
 
 // TableSplitKeyLen is the length of key 't{table_id}' which is used for table split.
@@ -71,7 +72,29 @@ func EncodeRowKeyWithHandle(tableID int64, handle int64) kv.Key {
 
 // DecodeRecordKey decodes the key and gets the tableID, handle.
 func DecodeRecordKey(key kv.Key) (tableID int64, handle int64, err error) {
-	/* Your code here */
+	if len(key) != RecordRowKeyLen {
+		err = errInvalidKey.GenWithStack("invalid key - %q", key)
+		return
+	}
+
+	tableID, _, isRecordKey, err := DecodeKeyHead(key)
+	if err != nil {
+		err = errors.Trace(err)
+		return
+	}
+
+	if !isRecordKey {
+		err = errInvalidKey.GenWithStack("invalid key - %q", key)
+		return
+	}
+
+	key = key[prefixLen:]
+	key, handle, err = codec.DecodeInt(key)
+	if err != nil {
+		err = errors.Trace(err)
+		return
+	}
+
 	return
 }
 
@@ -94,8 +117,19 @@ func EncodeIndexSeekKey(tableID int64, idxID int64, encodedValue []byte) kv.Key 
 
 // DecodeIndexKeyPrefix decodes the key and gets the tableID, indexID, indexValues.
 func DecodeIndexKeyPrefix(key kv.Key) (tableID int64, indexID int64, indexValues []byte, err error) {
-	/* Your code here */
-	return tableID, indexID, indexValues, nil
+	tableID, indexID, isRecordKey, err := DecodeKeyHead(key)
+	if err != nil {
+		err = errors.Trace(err)
+		return
+	}
+
+	if isRecordKey {
+		err = errInvalidIndexKey.GenWithStack("invalid index key - %q", key)
+		return
+	}
+
+	indexValues = key[prefixLen+idLen:]
+	return
 }
 
 // DecodeIndexKey decodes the key and gets the tableID, indexID, indexValues.
@@ -193,7 +227,7 @@ func DecodeKeyHead(key kv.Key) (tableID int64, indexID int64, isRecordKey bool, 
 		return
 	}
 
-	key = key[len(tablePrefix):]
+	key = key[tablePrefixLength:]
 	key, tableID, err = codec.DecodeInt(key)
 	if err != nil {
 		err = errors.Trace(err)
@@ -209,7 +243,7 @@ func DecodeKeyHead(key kv.Key) (tableID int64, indexID int64, isRecordKey bool, 
 		return
 	}
 
-	key = key[len(indexPrefixSep):]
+	key = key[indexPrefixSepLength:]
 
 	key, indexID, err = codec.DecodeInt(key)
 	if err != nil {
