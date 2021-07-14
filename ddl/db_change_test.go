@@ -533,3 +533,47 @@ func (s *testStateChangeSuite) TestParallelDDLBeforeRunDDLJob(c *C) {
 	intercept = &ddl.TestInterceptor{}
 	d.(ddl.DDLForTest).SetInterceptor(intercept)
 }
+
+
+
+// TestDropNotNullColumn is used to test issue #8654.
+func (s *testStateChangeSuite) TestDropNotNullColumn(c *C) {
+	tk := testkit.NewTestKit(c, s.store)
+	tk.MustExec("use test")
+	tk.MustExec("create table t (id int, a int not null default 11)")
+	tk.MustExec("insert into t values(1, 1)")
+	tk.MustExec("create table t1 (id int, b varchar(255) not null)")
+	tk.MustExec("insert into t1 values(2, '')")
+	tk1 := testkit.NewTestKit(c, s.store)
+	tk1.MustExec("use test")
+
+	var checkErr error
+	d := s.dom.DDL()
+	originalCallback := d.GetHook()
+	callback := &ddl.TestDDLCallback{}
+	sqlNum := 0
+	callback.OnJobUpdatedExported = func(job *model.Job) {
+		if checkErr != nil {
+			return
+		}
+		originalCallback.OnChanged(nil)
+		if job.SchemaState == model.StateWriteOnly {
+			switch sqlNum {
+			case 0:
+				_, checkErr = tk1.Exec("insert into t set id = 1")
+			case 1:
+				_, checkErr = tk1.Exec("insert into t1 set id = 2")
+			}
+		}
+	}
+
+	d.(ddl.DDLForTest).SetHook(callback)
+	tk.MustExec("alter table t drop column a")
+	c.Assert(checkErr, IsNil)
+	sqlNum++
+	tk.MustExec("alter table t1 drop column b")
+	c.Assert(checkErr, IsNil)
+	sqlNum++
+	d.(ddl.DDLForTest).SetHook(originalCallback)
+	tk.MustExec("drop table t, t1")
+}
